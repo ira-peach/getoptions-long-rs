@@ -1,4 +1,3 @@
-#![allow(unused)]
 /// getoptions-long - library to parse command line inspired by perl's Getopt::Long
 /// Copyright (C) 2024  Ira Peach
 ///
@@ -15,16 +14,20 @@
 /// You should have received a copy of the GNU Affero General Public License
 /// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::env;
+use std::fmt::Debug;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::slice::Iter;
+
 pub enum Opt<'a> {
     Switch(&'a str, &'a mut bool),
     Arg(&'a str, &'a mut String),
     SubArg(&'a str, &'a mut dyn FnMut(&str,&str)),
     SubSwitch(&'a str, &'a mut dyn FnMut(&str)),
+    Free(&'a mut Vec<String>),
     //Opt(&'a str, &'a mut str),
 }
-
-use std::fmt::Debug;
-use std::fmt::Formatter;
 
 impl Debug for Opt<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
@@ -33,6 +36,7 @@ impl Debug for Opt<'_> {
             Opt::Arg(x, s) => f.debug_tuple("Opt::Arg").field(x).field(s).finish(),
             Opt::SubArg(x, _) => f.debug_tuple("Opt::SubArg").field(x).field(&"Fn").finish(),
             Opt::SubSwitch(x, _) => f.debug_tuple("Opt::SubSwitch").field(x).field(&"Fn").finish(),
+            Opt::Free(v) => f.debug_tuple("Opt::Free").field(v).finish(),
         }
     }
 }
@@ -40,10 +44,18 @@ impl Debug for Opt<'_> {
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub enum Error {
     NeedArgument(String),
+    Unexpected(String),
 }
 
-use std::env;
-use std::slice::Iter;
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), std::fmt::Error> {
+        match self {
+            Error::NeedArgument(s) => write!(f, "need argument for '{}'", s),
+            Error::Unexpected(s) => write!(f, "unexpected argument '{}'", s),
+        }
+    }
+}
 
 fn split_off(slice: &str) -> Result<(&str, &str),&str> {
     let split = slice.split_once('|');
@@ -55,22 +67,20 @@ fn split_off(slice: &str) -> Result<(&str, &str),&str> {
     }
 }
 
-fn match_short(arg: &str, switch: &str) -> bool {
-    if arg.chars().count() != 1 {
-        return false;
-    }
-
+fn match_short(ch: char, switch: &str) -> bool {
+    let mut buf = [0u8; 4];
+    let ch: &str = ch.encode_utf8(&mut buf);
     let split = split_off(switch);
     if let Ok((s1, s2)) = split {
-        if s1 == arg {
+        if s1 == ch {
             return true;
         }
-        else if s2 == arg {
+        else if s2 == ch {
             return true;
         }
     }
     else if let Err(s) = split {
-        if s == arg {
+        if s == ch {
             return true;
         }
     }
@@ -100,43 +110,57 @@ fn match_long(arg: &str, switch: &str) -> bool {
 }
 
 fn handle_short_opt(args_iter: &mut Iter<&str>, arg: &str, opts: &mut [Opt]) -> Result<bool,Error> {
-    let mut iter = opts.iter_mut();
-    while let Some(opt) = iter.next() {
-        if let Opt::Switch(switch, &mut ref mut b) = opt {
-            if match_short(arg, switch) {
-                *b = true;
-                return Ok(true);
-            }
-        }
-        else if let Opt::Arg(switch, &mut ref mut s) = opt {
-            if match_short(arg, switch) {
-                if let Some(a) = args_iter.next() {
-                    *s = a.to_string();
-                    return Ok(true);
-                }
-                else {
-                    return Err(Error::NeedArgument(format!("-{}", arg)));
+    let mut chars_iter = arg.chars().peekable();
+    let mut parsed = false;
+    while let Some(ch) = chars_iter.next() {
+        let mut iter = opts.iter_mut();
+        while let Some(opt) = iter.next() {
+            if let Opt::Switch(switch, &mut ref mut b) = opt {
+                if match_short(ch, switch) {
+                    *b = true;
+                    parsed = true;
                 }
             }
-        }
-        else if let Opt::SubArg(switch, func) = opt {
-            if match_short(arg, switch) {
-                if let Some(a) = args_iter.next() {
-                    func(arg, *a);
-                }
-                else {
-                    return Err(Error::NeedArgument(format!("-{}", arg)));
+            else if let Opt::Arg(switch, &mut ref mut s) = opt {
+                if match_short(ch, switch) {
+                    if chars_iter.peek().is_some() {
+                        let a: String = chars_iter.collect();
+                        *s = a;
+                        return Ok(true);
+                    }
+                    else if let Some(a) = args_iter.next() {
+                        *s = a.to_string();
+                        parsed = true;
+                    }
+                    else {
+                        return Err(Error::NeedArgument(format!("-{}", arg)));
+                    }
                 }
             }
-        }
-        else if let Opt::SubSwitch(switch, func) = opt {
-            if match_short(arg, switch) {
-                func(arg);
-                return Ok(true);
+            else if let Opt::SubArg(switch, func) = opt {
+                if match_short(ch, switch) {
+                    if let Some(a) = args_iter.next() {
+                        func(arg, *a);
+                        parsed = true;
+                    }
+                    else {
+                        return Err(Error::NeedArgument(format!("-{}", arg)));
+                    }
+                }
+            }
+            else if let Opt::SubSwitch(switch, func) = opt {
+                if match_short(ch, switch) {
+                    func(arg);
+                    parsed = true;
+                }
             }
         }
     }
-    return Ok(false);
+
+    if parsed {
+        return Ok(true);
+    }
+    Err(Error::Unexpected(format!("-{}", arg)))
 }
 
 fn extract_equals(arg: &str) -> Option<(&str,&str)> {
@@ -187,6 +211,7 @@ fn handle_long_opt(args_iter: &mut Iter<&str>, arg: &str, opts: &mut [Opt]) -> R
                 }
                 else if let Some(a) = args_iter.next() {
                     func(arg, *a);
+                    return Ok(true);
                 }
                 else {
                     return Err(Error::NeedArgument(format!("--{}", arg)));
@@ -200,13 +225,29 @@ fn handle_long_opt(args_iter: &mut Iter<&str>, arg: &str, opts: &mut [Opt]) -> R
             }
         }
     }
-    return Ok(false);
+    Err(Error::Unexpected(format!("--{}", arg)))
+}
+
+fn handle_free_arg(arg: &str, opts: &mut [Opt]) -> Result<(),Error> {
+    for opt in &mut *opts {
+        if let Opt::Free(&mut ref mut vec) = opt {
+            vec.push(arg.to_string());
+            return Ok(());
+        }
+    }
+    Err(Error::Unexpected(arg.to_string()))
 }
 
 pub fn get_options(opts: &mut [Opt], args: &[&str]) -> Result<(),Error> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
-        if arg.starts_with("--") {
+        if *arg == "--" {
+            while let Some(arg) = iter.next() {
+                handle_free_arg(arg, opts)?;
+                return Ok(());
+            }
+        }
+        else if arg.starts_with("--") {
             let mut chars = arg.chars();
             chars.next();
             chars.next();
@@ -218,6 +259,9 @@ pub fn get_options(opts: &mut [Opt], args: &[&str]) -> Result<(),Error> {
             chars.next();
             let arg = chars.as_str();
             handle_short_opt(&mut iter, arg, opts)?;
+        }
+        else {
+            handle_free_arg(arg, opts)?;
         }
     }
     Ok(())
@@ -385,6 +429,7 @@ mod tests {
         ], &args);
 
         assert_eq!(result, Err(Error::NeedArgument("-a".to_string())));
+        assert_eq!(result.unwrap_err().to_string(), "need argument for '-a'");
 
         let args = ["--a-flag"];
 
@@ -469,35 +514,232 @@ mod tests {
         assert_eq!(opt, "boofar");
     }
 
-    //#[test]
-    //fn test_short_switch_correct() {
-    //    let args = ["-c"];
+    #[test]
+    fn test_free_arguments() {
+        let args = ["a", "bb", "ccc"];
 
-    //    let mut a_opt = false;
-    //    let mut b_opt = false;
+        let mut free = vec![];
 
-    //    get_options(&mut [
-    //        Opt::Switch("a", &mut a_opt),
-    //        Opt::Switch("b", &mut b_opt),
-    //    ], &args);
+        let result = get_options(&mut [
+            Opt::Free(&mut free),
+        ], &args);
 
-    //    assert!(!a_opt);
-    //    assert!(!b_opt);
-    //}
+        assert_eq!(result, Ok(()));
+        assert_eq!(free, vec!["a", "bb", "ccc"]);
+    }
+
+    #[test]
+    fn test_double_dash_omit() {
+        let args = ["--"];
+
+        let mut free = vec![];
+
+        let result = get_options(&mut [
+            Opt::Free(&mut free),
+        ], &args);
+
+        assert_eq!(result, Ok(()));
+        assert!(free.len() == 0);
+    }
+
+    #[test]
+    fn test_double_dash_escape() {
+        let args = ["--", "-f"];
+
+        let mut flag = false;
+        let mut free = vec![];
+
+        let result = get_options(&mut [
+            Opt::Switch("f|flag", &mut flag),
+            Opt::Free(&mut free),
+        ], &args);
+
+        assert_eq!(result, Ok(()));
+        assert!(!flag);
+        assert!(free.len() == 1);
+        assert_eq!(free, vec!("-f"));
+    }
+
+    #[test]
+    fn test_switch_bundling() {
+        let args = ["-ab"];
+
+        let mut flag_a = false;
+        let mut flag_b = false;
+
+        get_options(&mut [
+            Opt::Switch("a", &mut flag_a),
+            Opt::Switch("b", &mut flag_b),
+        ], &args);
+
+        assert!(flag_a);
+        assert!(flag_b);
+    }
+
+    #[test]
+    fn test_switch_arg_bundling() {
+        let args = ["-ab", "2"];
+
+        let mut flag_a = false;
+        let mut flag_b = String::new();
+
+        get_options(&mut [
+            Opt::Switch("a", &mut flag_a),
+            Opt::Arg("b", &mut flag_b),
+        ], &args);
+
+        assert!(flag_a);
+        assert_eq!(flag_b, "2");
+    }
+
+    #[test]
+    fn test_arg_nospace() {
+        let args = ["-a7"];
+
+        let mut flag_a = String::new();
+
+        get_options(&mut [
+            Opt::Arg("a", &mut flag_a),
+        ], &args);
+
+        assert_eq!(flag_a, "7");
+    }
+
+    #[test]
+    fn test_arg_nospace_longer() {
+        let args = ["-aFooBarBaz"];
+
+        let mut flag_a = String::new();
+
+        get_options(&mut [
+            Opt::Arg("a", &mut flag_a),
+        ], &args);
+
+        assert_eq!(flag_a, "FooBarBaz");
+    }
+
+    #[test]
+    fn test_bundle_switch_arg_nospace() {
+        let args = ["-ba8"];
+
+        let mut flag_a = String::new();
+        let mut flag_b = false;
+
+        get_options(&mut [
+            Opt::Arg("a", &mut flag_a),
+            Opt::Switch("b", &mut flag_b),
+        ], &args);
+
+        assert_eq!(flag_a, "8");
+        assert!(flag_b);
+    }
+
+    #[test]
+    fn test_bundle_arg_switch_nospace() {
+        let args = ["-ab8"];
+
+        let mut flag_a = String::new();
+        let mut flag_b = false;
+
+        get_options(&mut [
+            Opt::Arg("a", &mut flag_a),
+            Opt::Switch("b", &mut flag_b),
+        ], &args);
+
+        assert_eq!(flag_a, "b8");
+        assert!(!flag_b);
+    }
+
+    #[test]
+    fn test_flag_invalid() {
+        let args = ["-f"];
+
+        let mut flag_a = false;
+
+        let result = get_options(&mut [
+            Opt::Switch("a", &mut flag_a),
+        ], &args);
+
+        assert_eq!(result, Err(Error::Unexpected("-f".to_string())));
+        assert!(!flag_a);
+
+        let args = ["--foo", "7"];
+
+        let mut flag_a = false;
+        let mut free = vec![];
+
+        let result = get_options(&mut [
+            Opt::Switch("a", &mut flag_a),
+            Opt::Free(&mut free),
+        ], &args);
+
+        assert_eq!(result, Err(Error::Unexpected("--foo".to_string())));
+        assert_eq!(result.unwrap_err().to_string(), "unexpected argument '--foo'");
+        assert_eq!(free.len(), 0);
+        assert!(!flag_a);
+    }
+
+    #[test]
+    fn test_undeclared_free() {
+        let args = ["foo", "bar", "baz"];
+
+        let mut flag_a = false;
+
+        let result = get_options(&mut [
+            Opt::Switch("a", &mut flag_a),
+        ], &args);
+
+        assert_eq!(result, Err(Error::Unexpected("foo".to_string())));
+        assert!(!flag_a);
+
+        let args = ["--", "-7"];
+
+        let mut flag_a = false;
+
+        let result = get_options(&mut [
+            Opt::Switch("a", &mut flag_a),
+        ], &args);
+
+        assert!(!flag_a);
+        assert_eq!(result, Err(Error::Unexpected("-7".to_string())));
+        assert_eq!(result.unwrap_err().to_string(), "unexpected argument '-7'");
+    }
+
+    #[test]
+    fn test_callback_underfloaw() {
+        let args = ["--foo", "7", "--bar"];
+
+        let mut flag_a = String::new();
+        let mut flag_b = String::new();
+
+        let result = get_options(&mut [
+            Opt::SubArg("foo", &mut |arg, val| {
+                flag_a = val.to_owned();
+            }),
+            Opt::SubArg("bar", &mut |arg, val| {
+                flag_b = val.to_owned();
+            }),
+        ], &args);
+
+        assert_eq!(result, Err(Error::NeedArgument("--bar".to_string())));
+        assert_eq!(flag_b, "");
+    }
 }
 
-//sub usage { say "usage: $0 [OPTIONS]... FILES..."; }
-//my @args = ();
-//sub add_arg {
-//    push @args, @_;
-//}
+// perl example:
 //
-//my $options_file = ".optionsrc";
-//my $verbose;
-//
-//GetOptions(
-//    "h|help" => sub { usage; exit 0 },
-//    "f|options-file" => \$options_file,
-//    "v|verbose!" => \$verbose,
-//    "<>" => \&add_arg)
-//or die "error parsing command line arguments: $@";
+//     sub usage { say "usage: $0 [OPTIONS]... FILES..."; }
+//     my @args = ();
+//     sub add_arg {
+//         push @args, @_;
+//     }
+//     
+//     my $options_file = ".optionsrc";
+//     my $verbose;
+//     
+//     GetOptions(
+//         "h|help" => sub { usage; exit 0 },
+//         "f|options-file" => \$options_file,
+//         "v|verbose!" => \$verbose,
+//         "<>" => \&add_arg)
+//     or die "error parsing command line arguments: $@";
