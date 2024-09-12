@@ -14,7 +14,6 @@
 /// You should have received a copy of the GNU Affero General Public License
 /// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::env;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -238,7 +237,17 @@ fn handle_free_arg(arg: &str, opts: &mut [Opt]) -> Result<(),Error> {
     Err(Error::Unexpected(arg.to_string()))
 }
 
-pub fn get_options(opts: &mut [Opt], args: &[&str]) -> Result<(),Error> {
+pub fn get_options_env(opts: &mut [Opt]) -> Result<(),Error> {
+    let env_args: Vec<String> = std::env::args().collect();
+    get_options(opts, &env_args)
+}
+
+pub fn get_options(opts: &mut [Opt], args: &[String]) -> Result<(),Error> {
+    let args: Vec<&str> = args.iter().map(|x| x.as_ref()).collect();
+    get_options_str(opts, &args)
+}
+
+pub fn get_options_str(opts: &mut [Opt], args: &[&str]) -> Result<(),Error> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         if *arg == "--" {
@@ -269,12 +278,13 @@ pub fn get_options(opts: &mut [Opt], args: &[&str]) -> Result<(),Error> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused)]
     use super::*;
 
     #[test]
     fn test_no_input() {
         let args = [];
-        let result = get_options(&mut [], &args);
+        let result = get_options_str(&mut [], &args);
         assert!(result.is_ok());
     }
 
@@ -284,7 +294,7 @@ mod tests {
 
         let mut a_opt = false;
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Switch("a", &mut a_opt),
         ], &args);
 
@@ -298,7 +308,7 @@ mod tests {
         let mut a_opt = false;
         let mut b_opt = false;
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Switch("a", &mut a_opt),
             Opt::Switch("b", &mut b_opt),
         ], &args);
@@ -314,7 +324,7 @@ mod tests {
         let mut long_flag = false;
         let mut another_flag = false;
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Switch("long-flag", &mut long_flag),
             Opt::Switch("another-flag", &mut another_flag),
         ], &args);
@@ -332,7 +342,7 @@ mod tests {
         let mut long_flag = false;
         let mut another_flag = false;
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Switch("a", &mut short_flag),
             Opt::Switch("2", &mut another_short_flag),
             Opt::Switch("long-flag", &mut long_flag),
@@ -350,7 +360,7 @@ mod tests {
         let mut flag = false;
         let mut flag2 = false;
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Switch("a|a-flag", &mut flag),
             Opt::Switch("b|b-flag", &mut flag2),
         ], &args);
@@ -363,7 +373,7 @@ mod tests {
         let mut flag = false;
         let mut flag2 = false;
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Switch("a|a-flag", &mut flag),
             Opt::Switch("b|b-flag", &mut flag2),
         ], &args);
@@ -378,7 +388,7 @@ mod tests {
 
         let mut opt = String::new();
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Arg("a|a-flag", &mut opt),
         ], &args);
 
@@ -388,7 +398,7 @@ mod tests {
 
         let mut opt = String::new();
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Arg("a|a-flag", &mut opt),
         ], &args);
 
@@ -401,7 +411,7 @@ mod tests {
 
         let mut opt = String::new();
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Arg("a|a-flag", &mut opt),
         ], &args);
 
@@ -411,7 +421,7 @@ mod tests {
 
         let mut opt = String::new();
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Arg("a|a-flag", &mut opt),
         ], &args);
 
@@ -424,7 +434,7 @@ mod tests {
 
         let mut opt = String::new();
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::Arg("a|a-flag", &mut opt),
         ], &args);
 
@@ -435,7 +445,7 @@ mod tests {
 
         let mut opt = String::new();
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::Arg("a|a-flag", &mut opt),
         ], &args);
 
@@ -448,7 +458,7 @@ mod tests {
 
         let mut opt = String::new();
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::SubArg("flag|f", &mut |arg, val| { opt = format!("{}{}", opt, val); }),
         ], &args);
 
@@ -459,7 +469,7 @@ mod tests {
 
         let mut opt = String::new();
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::SubArg("flag|f", &mut |arg, val| { opt = format!("{}{}", opt, val); }),
         ], &args);
 
@@ -486,7 +496,7 @@ mod tests {
             }
         };
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::SubSwitch("verbose|v", &mut |arg| {
                 *opt.borrow_mut() += 1;
             }),
@@ -506,7 +516,7 @@ mod tests {
 
         let mut opt = String::new();
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::Arg("a|a-flag", &mut opt),
         ], &args);
 
@@ -520,7 +530,7 @@ mod tests {
 
         let mut free = vec![];
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::Free(&mut free),
         ], &args);
 
@@ -534,7 +544,7 @@ mod tests {
 
         let mut free = vec![];
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::Free(&mut free),
         ], &args);
 
@@ -549,7 +559,7 @@ mod tests {
         let mut flag = false;
         let mut free = vec![];
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::Switch("f|flag", &mut flag),
             Opt::Free(&mut free),
         ], &args);
@@ -567,7 +577,7 @@ mod tests {
         let mut flag_a = false;
         let mut flag_b = false;
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Switch("a", &mut flag_a),
             Opt::Switch("b", &mut flag_b),
         ], &args);
@@ -583,7 +593,7 @@ mod tests {
         let mut flag_a = false;
         let mut flag_b = String::new();
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Switch("a", &mut flag_a),
             Opt::Arg("b", &mut flag_b),
         ], &args);
@@ -598,7 +608,7 @@ mod tests {
 
         let mut flag_a = String::new();
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Arg("a", &mut flag_a),
         ], &args);
 
@@ -611,7 +621,7 @@ mod tests {
 
         let mut flag_a = String::new();
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Arg("a", &mut flag_a),
         ], &args);
 
@@ -625,7 +635,7 @@ mod tests {
         let mut flag_a = String::new();
         let mut flag_b = false;
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Arg("a", &mut flag_a),
             Opt::Switch("b", &mut flag_b),
         ], &args);
@@ -641,7 +651,7 @@ mod tests {
         let mut flag_a = String::new();
         let mut flag_b = false;
 
-        get_options(&mut [
+        get_options_str(&mut [
             Opt::Arg("a", &mut flag_a),
             Opt::Switch("b", &mut flag_b),
         ], &args);
@@ -656,7 +666,7 @@ mod tests {
 
         let mut flag_a = false;
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::Switch("a", &mut flag_a),
         ], &args);
 
@@ -668,7 +678,7 @@ mod tests {
         let mut flag_a = false;
         let mut free = vec![];
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::Switch("a", &mut flag_a),
             Opt::Free(&mut free),
         ], &args);
@@ -685,7 +695,7 @@ mod tests {
 
         let mut flag_a = false;
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::Switch("a", &mut flag_a),
         ], &args);
 
@@ -696,7 +706,7 @@ mod tests {
 
         let mut flag_a = false;
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::Switch("a", &mut flag_a),
         ], &args);
 
@@ -712,7 +722,7 @@ mod tests {
         let mut flag_a = String::new();
         let mut flag_b = String::new();
 
-        let result = get_options(&mut [
+        let result = get_options_str(&mut [
             Opt::SubArg("foo", &mut |arg, val| {
                 flag_a = val.to_owned();
             }),
