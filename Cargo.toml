@@ -3,5 +3,10 @@ name = "getoptions-long"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
+description = "Argument parser inspired by Perl's Getopt::Long"
+repository = "https://github.com/ira-peach/getoptions-long-rs"
+readme = "README.txt"
+keywords = ["arg", "argument", "cli", "parse", "parser"]
+categories = ["command-line-interface"]
 
 [dependencies]
