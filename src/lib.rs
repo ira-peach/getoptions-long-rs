@@ -278,7 +278,6 @@ pub fn get_options_str(opts: &mut [Opt], args: &[&str]) -> Result<(),Error> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(unused)]
     use super::*;
 
     #[test]
@@ -294,10 +293,11 @@ mod tests {
 
         let mut a_opt = false;
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Switch("a", &mut a_opt),
         ], &args);
 
+        assert!(result.is_ok());
         assert!(a_opt);
     }
 
@@ -308,13 +308,14 @@ mod tests {
         let mut a_opt = false;
         let mut b_opt = false;
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Switch("a", &mut a_opt),
             Opt::Switch("b", &mut b_opt),
         ], &args);
 
         assert!(!a_opt);
         assert!(!b_opt);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -324,11 +325,12 @@ mod tests {
         let mut long_flag = false;
         let mut another_flag = false;
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Switch("long-flag", &mut long_flag),
             Opt::Switch("another-flag", &mut another_flag),
         ], &args);
 
+        assert!(result.is_ok());
         assert!(long_flag);
         assert!(!another_flag);
     }
@@ -342,13 +344,14 @@ mod tests {
         let mut long_flag = false;
         let mut another_flag = false;
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Switch("a", &mut short_flag),
             Opt::Switch("2", &mut another_short_flag),
             Opt::Switch("long-flag", &mut long_flag),
             Opt::Switch("another-flag", &mut another_flag),
         ], &args);
 
+        assert!(result.is_ok());
         assert!(long_flag);
         assert!(!another_flag);
     }
@@ -360,11 +363,12 @@ mod tests {
         let mut flag = false;
         let mut flag2 = false;
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Switch("a|a-flag", &mut flag),
             Opt::Switch("b|b-flag", &mut flag2),
         ], &args);
 
+        assert!(result.is_ok());
         assert!(flag);
         assert!(!flag2);
 
@@ -373,11 +377,12 @@ mod tests {
         let mut flag = false;
         let mut flag2 = false;
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Switch("a|a-flag", &mut flag),
             Opt::Switch("b|b-flag", &mut flag2),
         ], &args);
 
+        assert!(result.is_ok());
         assert!(flag);
         assert!(!flag2);
     }
@@ -388,20 +393,22 @@ mod tests {
 
         let mut opt = String::new();
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Arg("a|a-flag", &mut opt),
         ], &args);
 
+        assert!(result.is_ok());
         assert_eq!(opt, "foo bar");
 
         let args = ["--a-flag", "foo bar"];
 
         let mut opt = String::new();
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Arg("a|a-flag", &mut opt),
         ], &args);
 
+        assert!(result.is_ok());
         assert_eq!(opt, "foo bar");
     }
 
@@ -411,20 +418,22 @@ mod tests {
 
         let mut opt = String::new();
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Arg("a|a-flag", &mut opt),
         ], &args);
 
+        assert!(result.is_ok());
         assert_eq!(opt, "bar baz");
 
         let args = ["--a-flag", "foo bar", "-a", "bar baz"];
 
         let mut opt = String::new();
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Arg("a|a-flag", &mut opt),
         ], &args);
 
+        assert!(result.is_ok());
         assert_eq!(opt, "bar baz");
     }
 
@@ -459,7 +468,7 @@ mod tests {
         let mut opt = String::new();
 
         let result = get_options_str(&mut [
-            Opt::SubArg("flag|f", &mut |arg, val| { opt = format!("{}{}", opt, val); }),
+            Opt::SubArg("flag|f", &mut |_arg, val| { opt = format!("{}{}", opt, val); }),
         ], &args);
 
         assert_eq!(result, Ok(()));
@@ -470,7 +479,7 @@ mod tests {
         let mut opt = String::new();
 
         let result = get_options_str(&mut [
-            Opt::SubArg("flag|f", &mut |arg, val| { opt = format!("{}{}", opt, val); }),
+            Opt::SubArg("flag|f", &mut |_arg, val| { opt = format!("{}{}", opt, val); }),
         ], &args);
 
         assert_eq!(result, Ok(()));
@@ -481,13 +490,11 @@ mod tests {
     fn test_callback_switch() {
         let args = ["-v", "-f", "-v", "-e", "-g"];
 
-        use std::rc::Rc;
-        use std::cell::Cell;
         use std::cell::RefCell;
 
         let opt: RefCell<i64> = 0.into();
 
-        let mut sub: &mut dyn for<'a> FnMut(&'a str) = &mut |arg| {
+        let sub: &mut dyn for<'a> FnMut(&'a str) = &mut |arg| {
             if arg == "f" {
                 *opt.borrow_mut() += 2;
             }
@@ -497,10 +504,10 @@ mod tests {
         };
 
         let result = get_options_str(&mut [
-            Opt::SubSwitch("verbose|v", &mut |arg| {
+            Opt::SubSwitch("verbose|v", &mut |_arg| {
                 *opt.borrow_mut() += 1;
             }),
-            Opt::SubSwitch("e", &mut |arg| {
+            Opt::SubSwitch("e", &mut |_arg| {
                 *opt.borrow_mut() += 4;
             }),
             Opt::SubSwitch("f|g", sub),
@@ -577,11 +584,12 @@ mod tests {
         let mut flag_a = false;
         let mut flag_b = false;
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Switch("a", &mut flag_a),
             Opt::Switch("b", &mut flag_b),
         ], &args);
 
+        assert!(result.is_ok());
         assert!(flag_a);
         assert!(flag_b);
     }
@@ -593,11 +601,12 @@ mod tests {
         let mut flag_a = false;
         let mut flag_b = String::new();
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Switch("a", &mut flag_a),
             Opt::Arg("b", &mut flag_b),
         ], &args);
 
+        assert!(result.is_ok());
         assert!(flag_a);
         assert_eq!(flag_b, "2");
     }
@@ -608,10 +617,11 @@ mod tests {
 
         let mut flag_a = String::new();
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Arg("a", &mut flag_a),
         ], &args);
 
+        assert!(result.is_ok());
         assert_eq!(flag_a, "7");
     }
 
@@ -621,10 +631,11 @@ mod tests {
 
         let mut flag_a = String::new();
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Arg("a", &mut flag_a),
         ], &args);
 
+        assert!(result.is_ok());
         assert_eq!(flag_a, "FooBarBaz");
     }
 
@@ -635,11 +646,12 @@ mod tests {
         let mut flag_a = String::new();
         let mut flag_b = false;
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Arg("a", &mut flag_a),
             Opt::Switch("b", &mut flag_b),
         ], &args);
 
+        assert!(result.is_ok());
         assert_eq!(flag_a, "8");
         assert!(flag_b);
     }
@@ -651,11 +663,12 @@ mod tests {
         let mut flag_a = String::new();
         let mut flag_b = false;
 
-        get_options_str(&mut [
+        let result = get_options_str(&mut [
             Opt::Arg("a", &mut flag_a),
             Opt::Switch("b", &mut flag_b),
         ], &args);
 
+        assert!(result.is_ok());
         assert_eq!(flag_a, "b8");
         assert!(!flag_b);
     }
@@ -723,10 +736,10 @@ mod tests {
         let mut flag_b = String::new();
 
         let result = get_options_str(&mut [
-            Opt::SubArg("foo", &mut |arg, val| {
+            Opt::SubArg("foo", &mut |_arg, val| {
                 flag_a = val.to_owned();
             }),
-            Opt::SubArg("bar", &mut |arg, val| {
+            Opt::SubArg("bar", &mut |_arg, val| {
                 flag_b = val.to_owned();
             }),
         ], &args);
