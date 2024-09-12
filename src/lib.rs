@@ -1,10 +1,31 @@
+//! getoptions-long - library to parse command line inspired by perl's Getopt::Long
+//! Copyright (C) 2024  Ira Peach
+//!
+//! This program is free software: you can redistribute it and/or modify
+//! it under the terms of the GNU Affero General Public License as published by
+//! the Free Software Foundation, either version 3 of the License, or
+//! (at your option) any later version.
+//!
+//! This program is distributed in the hope that it will be useful,
+//! but WITHOUT ANY WARRANTY; without even the implied warranty of
+//! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//! GNU Affero General Public License for more details.
+//!
+//! You should have received a copy of the GNU Affero General Public License
+//! along with this program.  If not, see <https://www.gnu.org/licenses/>.
+//!
+//! ===============
+//! getoptions-long
+//! ===============
 //! Argument parser inspired by Perl's Getopt::Long.
 //!
 //! Provides a likely familiar option parser for those who may be familiar with Getopt::Long from
 //! Perl.  The specific options for Getopt::Long that were targeted are `qw(:config gnu_getopt
 //! no_ignore_case no_auto_abbrev)`.
 //!
-//! Quickstart:
+//! ==========
+//! Quickstart
+//! ==========
 //!
 //! ```
 //! use std::cell::RefCell;
@@ -54,19 +75,24 @@
 //! // ...
 //! ```
 //!
+//! ====
+//! Why?
+//! ====
+//!
 //! Why another command line parser?  Well, I missed the options Getopt::Long can do.
 //!
-//! In comparison to existing crates, such as clap and gumdrop, this parser is declarative only at
-//! the function invocation site (usually `get_options` if you have a fully realized list of
-//! strings, or `get_options_env` for quick and dirty).  It also uses a //lot// of mutability,
+//! In comparison to existing crates, such as clap and gumdrop, this parser is active in your code
+//! only at the function invocation site (usually `get_options` if you have a fully realized list
+//! of strings, or `get_options_env` for quick and dirty).  It also uses a //lot// of mutability,
 //! which Rust exposes in excruciating detail.  You do not have to define your own type, use derive
 //! macros, and hope that it does what you want (clap), or drop to a frustrating builder invocation
 //! chain to enable last-argument precedence (clap), or end up in a frustrating API for using
 //! callbacks (clap, gumdrop).  (I'm actually not sure it's possible to use callbacks with clap &
-//! grumdrop, because my brain might just not understand the documentation)
+//! grumdrop, because my brain might just not understand the documentation) (it is, but you have to
+//! use the Arg API in clap)
 //!
-//! The main thing that callbacks allow is the ability to use mutually exclusive command line
-//! arguments with last precedence, such as:
+//! Callbacks allow a lot of things.  The main thing I use them for is mutually exclusive command
+//! line arguments with last precedence, such as:
 //!
 //! ```
 //! use getoptions_long::*;
@@ -89,45 +115,40 @@
 //! assert_eq!(command.into_inner(), "command-baz");
 //! ```
 //!
-//! If you aren't familiar with the Rustonomicon (I definitely am not), you might be wondering why
-//! it is quite unergonomic to need to use RefCell.  It is the only way to pass the same closure to
-//! multiple switches (because we're violating the multiple mutable borrows rule).
+//! They can be trivially extended to adding repeat arguments, as well.
 //!
+//! If you aren't familiar with the Rustonomicon (I definitely am not), you might be wondering why
+//! it is quite unergonomic to need to use RefCell.  Encapsulating a value that is later borrowed
+//! from a RefCell is one of the scarce few ways to pass the same closure to multiple switches
+//! (because while we're not violating the multiple mutable borrows rule, we do promise Rust that
+//! we're being careful).
+//!
+//! ====
 //! Q&A:
+//! ====
 //!
 //! 1. Is it fast?  Seems fast enough for my needs.
-//! 2. How much does it allocate?  No idea.
+//! 2. How much does it allocate?  No idea.  Definitely allocates.
 //! 3. no_std?  No STDs, but I don't think compiling with no_std is in scope.
 //! 4. Other Getopt::Long options?  Maybe.  I mostly went with what I go with and seems fairly
-//!    consistent with GNU standards.
+//!    consistent with POSIX getopt with GNU extensions (I'm actually interested in testing exactly
+//!    how compliant we are).
 //! 5. Any benchmarks?  Nope.
 //! 6. Dependencies?  std.  That's it.
-//! 7. How long did it take you?  Not long enough that I actually released it.
+//! 7. How long did it take you?  Not long enough that I actually released it; less than 20 hours
+//!    of full headed stubborness.
 //! 8. Rewrite Perl in Rust?  Have you looked at the source code?  My eyes go spirally when I see
 //!    way too many macros and ifdefs.  I ain't doing that.  (unless...?)
 //! 9. Why not clap or gumdrop?  See above.
-
-
-// getoptions-long - library to parse command line inspired by perl's Getopt::Long
-// Copyright (C) 2024  Ira Peach
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+//! 10. Is this based off of Getopt::Long?  Nope.  No source code was referenced; if it were I
+//!     would keep the same licensing terms (and I'm probably open to relicensing given enough
+//!     value for labor).
 
 use std::fmt::Debug;
-use std::fmt::Display;
 use std::fmt::Formatter;
 use std::slice::Iter;
+
+use error::Error;
 
 /// Define options
 pub enum Opt<'a> {
@@ -143,8 +164,100 @@ pub enum Opt<'a> {
     Free(FnFree<'a>),
 }
 
+pub mod error {
+    use std::fmt::Display;
+    use std::fmt::Formatter;
+
+    /// Error type.  Each will print to a friendly string.
+    #[derive(Clone,Debug,Eq,PartialEq)]
+    pub enum Error {
+        /// Error describing that an argument was needed, but not available (i.e. underflow in
+        /// arguments).
+        NeedArgument(String),
+        /// Error describing an unexpected flag that was not defined, including free arguments that
+        /// were not sent to a callback.
+        Unexpected(String),
+    }
+
+
+    impl Display for Error {
+        fn fmt(&self, f: &mut Formatter) -> Result<(), std::fmt::Error> {
+            match self {
+                Error::NeedArgument(s) => write!(f, "need argument for '{}'", s),
+                Error::Unexpected(s) => write!(f, "unexpected argument '{}'", s),
+            }
+        }
+    }
+}
+
+/// Type for a closure for a switch.
+///
+/// Using RefCell to change the captured environment is required.  While it isn't strictly
+/// required, it is required if we want to reuse the closure.
+///
+/// (technically, this is a function pointer, not a closure, but the syntax creates the function
+/// pointer)
+///
+/// Example:
+///
+/// ```
+/// use std::cell::RefCell;
+/// use getoptions_long::*;
+///
+/// let args: Vec<String> = vec!["-t", "2", "-t", "20", "-t", "9"].into_iter().map(|x| x.to_string()).collect();
+/// let flag = RefCell::new(String::new());
+///
+/// let result = get_options(&mut [
+///     Opt::SubArg("t|toggle", &|_, val| { if val.len() < 2 { flag.replace_with(|_| val.to_string() ); }}),
+/// ], &args);
+/// assert_eq!(flag.into_inner(), "9");
+/// ```
 pub type FnSubSwitch<'a> = &'a dyn Fn(&str);
+/// Type for a closure for an argument.
+///
+/// Using RefCell to change the captured environment is required.  While it isn't strictly
+/// required, it is required if we want to reuse the closure.
+///
+/// (technically, this is a function pointer, not a closure, but the syntax creates the function
+/// pointer)
+///
+/// Example:
+///
+/// ```
+/// use std::cell::RefCell;
+/// use getoptions_long::*;
+///
+/// let args: Vec<String> = vec!["-t", "--toggle", "-t", "-t"].into_iter().map(|x| x.to_string()).collect();
+/// let flag = RefCell::new(false);
+///
+/// let result = get_options(&mut [
+///     Opt::SubSwitch("t|toggle", &|_| { flag.replace_with(|t| !*t ); }),
+/// ], &args);
+/// assert!(!flag.into_inner());
+/// ```
 pub type FnSubArg<'a> = &'a dyn Fn(&str,&str);
+/// Type for a closure for free arguments.
+///
+/// Using RefCell to change the captured environment is required.  While it isn't strictly
+/// required, it is required if we want to reuse the closure.
+///
+/// (technically, this is a function pointer, not a closure, but the syntax creates the function
+/// pointer)
+///
+/// Example:
+///
+/// ```
+/// use std::cell::RefCell;
+/// use getoptions_long::*;
+///
+/// let args: Vec<String> = vec!["foo", "bar", "baz"].into_iter().map(|x| x.to_string()).collect();
+/// let free_args = RefCell::new(vec![]);
+///
+/// let result = get_options(&mut [
+///     Opt::Free     (&|arg| free_args.borrow_mut().push(arg.to_string())),
+/// ], &args);
+/// // ...
+/// ```
 pub type FnFree<'a> = &'a dyn Fn(&str);
 
 impl Debug for Opt<'_> {
@@ -159,22 +272,7 @@ impl Debug for Opt<'_> {
     }
 }
 
-#[derive(Clone,Debug,Eq,PartialEq)]
-pub enum Error {
-    NeedArgument(String),
-    Unexpected(String),
-}
-
-
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), std::fmt::Error> {
-        match self {
-            Error::NeedArgument(s) => write!(f, "need argument for '{}'", s),
-            Error::Unexpected(s) => write!(f, "unexpected argument '{}'", s),
-        }
-    }
-}
-
+/// Split off the pipe symbol.
 fn split_off(slice: &str) -> Result<(&str, &str),&str> {
     let split = slice.split_once('|');
     if let Some((s1, s2)) = split {
@@ -185,6 +283,7 @@ fn split_off(slice: &str) -> Result<(&str, &str),&str> {
     }
 }
 
+/// Match a short option.
 fn match_short(ch: char, switch: &str) -> bool {
     let mut buf = [0u8; 4];
     let ch: &str = ch.encode_utf8(&mut buf);
@@ -205,6 +304,7 @@ fn match_short(ch: char, switch: &str) -> bool {
     return false;
 }
 
+/// Match a long option.
 fn match_long(arg: &str, switch: &str) -> bool {
     if arg.chars().count() == 1 {
         return false;
@@ -227,6 +327,9 @@ fn match_long(arg: &str, switch: &str) -> bool {
     return false;
 }
 
+/// Handle a short option.
+///
+/// Will unbundle multiple switches, or consume the rest of the bundle if an argument requires.
 fn handle_short_opt(args_iter: &mut Iter<&str>, arg: &str, opts: &mut [Opt]) -> Result<bool,Error> {
     let mut chars_iter = arg.chars().peekable();
     let mut parsed = false;
@@ -283,6 +386,7 @@ fn handle_short_opt(args_iter: &mut Iter<&str>, arg: &str, opts: &mut [Opt]) -> 
     Err(Error::Unexpected(format!("-{}", arg)))
 }
 
+/// Extract the argument given by an equals.
 fn extract_equals(arg: &str) -> Option<(&str,&str)> {
     let split = arg.split_once('=');
     if let Some((arg, equals_value)) = split {
@@ -293,6 +397,7 @@ fn extract_equals(arg: &str) -> Option<(&str,&str)> {
     }
 }
 
+/// Handle a long option.
 fn handle_long_opt(args_iter: &mut Iter<&str>, arg: &str, opts: &mut [Opt]) -> Result<bool,Error> {
     for opt in &mut *opts {
         if let Opt::Switch(switch, &mut ref mut b) = opt {
@@ -348,6 +453,9 @@ fn handle_long_opt(args_iter: &mut Iter<&str>, arg: &str, opts: &mut [Opt]) -> R
     Err(Error::Unexpected(format!("--{}", arg)))
 }
 
+/// Handle a free argument.
+///
+/// The "--" escaping argument is allowed, even if there's no way to bind a free argument.
 fn handle_free_arg(arg: &str, opts: &mut [Opt]) -> Result<(),Error> {
     for opt in opts.iter_mut() {
         if let Opt::Free(f) = opt {
@@ -356,23 +464,32 @@ fn handle_free_arg(arg: &str, opts: &mut [Opt]) -> Result<(),Error> {
             return Ok(());
         }
     }
+    if arg == "--" {
+        return Ok(());
+    }
     Err(Error::Unexpected(arg.to_string()))
 }
 
+/// Parse options from std::env::args().
 pub fn get_options_env(opts: &mut [Opt]) -> Result<(),Error> {
     let env_args: Vec<String> = std::env::args().collect();
     get_options(opts, &env_args)
 }
 
+/// Parse options from a slice of String.
 pub fn get_options(opts: &mut [Opt], args: &[String]) -> Result<(),Error> {
     let args: Vec<&str> = args.iter().map(|x| x.as_ref()).collect();
     get_options_str(opts, &args)
 }
 
+/// Parse options from a slice of &str.
+///
+/// Mostly used if you pass arguments via &'static str.
 pub fn get_options_str(opts: &mut [Opt], args: &[&str]) -> Result<(),Error> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         if *arg == "--" {
+            handle_free_arg(arg, opts)?;
             while let Some(arg) = iter.next() {
                 handle_free_arg(arg, opts)?;
                 return Ok(());
@@ -672,7 +789,7 @@ mod tests {
     }
 
     #[test]
-    fn test_double_dash_omit() {
+    fn test_double_dash_no_omit() {
         let args = ["--"];
 
         let free = RefCell::new(vec![]);
@@ -686,7 +803,7 @@ mod tests {
         ], &args);
 
         assert_eq!(result, Ok(()));
-        assert!(free.into_inner().len() == 0);
+        assert!(free.into_inner().len() == 1);
     }
 
     #[test]
@@ -708,8 +825,8 @@ mod tests {
         let free = free.into_inner();
         assert_eq!(result, Ok(()));
         assert!(!flag);
-        assert!(free.len() == 1);
-        assert_eq!(free, vec!("-f"));
+        assert!(free.len() == 2);
+        assert_eq!(free, vec!("--", "-f"));
     }
 
     #[test]
@@ -957,7 +1074,7 @@ mod tests {
 
         assert_eq!(backup_dir, "/mnt/usr1/backups-test");
         assert!(dry_run);
-        assert_eq!(free_args.into_inner(), vec!["-f.txt"]);
+        assert_eq!(free_args.into_inner(), vec!["--", "-f.txt"]);
         assert!(list);
         assert!(!print);
         assert!(verbose);
