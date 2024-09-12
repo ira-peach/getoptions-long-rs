@@ -1,32 +1,148 @@
-/// getoptions-long - library to parse command line inspired by perl's Getopt::Long
-/// Copyright (C) 2024  Ira Peach
-///
-/// This program is free software: you can redistribute it and/or modify
-/// it under the terms of the GNU Affero General Public License as published by
-/// the Free Software Foundation, either version 3 of the License, or
-/// (at your option) any later version.
-///
-/// This program is distributed in the hope that it will be useful,
-/// but WITHOUT ANY WARRANTY; without even the implied warranty of
-/// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-/// GNU Affero General Public License for more details.
-///
-/// You should have received a copy of the GNU Affero General Public License
-/// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+//! Argument parser inspired by Perl's Getopt::Long.
+//!
+//! Provides a likely familiar option parser for those who may be familiar with Getopt::Long from
+//! Perl.  The specific options for Getopt::Long that were targeted are `qw(:config gnu_getopt
+//! no_ignore_case no_auto_abbrev)`.
+//!
+//! Quickstart:
+//!
+//! ```
+//! use getoptions_long::*;
+//! let args: Vec<String> = std::env::args().collect();
+//! // example invocation:
+//! //
+//! //    backup-profile --list -n --backup-dir=/mnt/usr1/backups --backup-dir \
+//! //        "/mnt/usr1/backups test -v -- -f.txt
+//! let prog = args[0].clone();
+//! let args: Vec<String> = args.into_iter().skip(1).collect();
+//! let usage =  || {
+//!     let prog = std::path::Path::new(&prog).file_name().unwrap().to_string_lossy();
+//!     println!("usage: {prog} [-hlcpnv] [-b BACKUP] [--] [TAR_ARGUMENTS]");
+//!     println!("  backup firefox profiles on win32 from cygwin");
+//!     println!("  -h,--help               display this usage");
+//!     println!("  -b,--backup-dir BACKUP  output backup files to BACKUP (default '.')");
+//!     println!("  -l,--list               list profiles and their paths");
+//!     println!("  -n,--dry-run            perform dry run with commands printed");
+//!     println!("  -p,--print              print Firefox configuration root");
+//!     println!("  -v,--verbose            be noisier");
+//! };
+//!
+//! let mut backup_dir = String::new();
+//! let mut dry_run = false;
+//! let mut free_args = vec![];
+//! let mut list = false;
+//! let mut print = false;
+//! let mut verbose = false;
+//!
+//! let result = get_options(&mut [
+//!     Opt::SubSwitch("help|h", &|_| { usage(); std::process::exit(0); }),
+//!     Opt::Switch   ("list|l", &mut list),
+//!     Opt::Switch   ("p|print", &mut print),
+//!     Opt::Switch   ("dry-run|n", &mut dry_run),
+//!     Opt::Arg      ("backup-dir|b", &mut backup_dir),
+//!     Opt::Switch   ("verbose|v", &mut verbose),
+//!     Opt::Free     (&mut free_args),
+//! ], &args);
+//!
+//! if let Err(ref err) = result {
+//!     eprintln!("ERROR: parsing command line arguments: {err}");
+//!     //std::process::exit(1); // don't do this in a test
+//! }
+//!
+//! // ...
+//! ```
+//!
+//! Why another command line parser?  Well, I missed the options Getopt::Long can do.
+//!
+//! In comparison to existing crates, such as clap and gumdrop, this parser is declarative only at
+//! the function invocation site (usually `get_options` if you have a fully realized list of
+//! strings, or `get_options_env` for quick and dirty).  It also uses a //lot// of mutability,
+//! which Rust exposes in excruciating detail.  You do not have to define your own type, use derive
+//! macros, and hope that it does what you want (clap), or drop to a frustrating builder invocation
+//! chain to enable last-argument precedence (clap), or end up in a frustrating API for using
+//! callbacks (clap, gumdrop).  (I'm actually not sure it's possible to use callbacks with clap &
+//! grumdrop, because my brain might just not understand the documentation)
+//!
+//! The main thing that callbacks allow is the ability to use mutually exclusive command line
+//! arguments with last precedence, such as:
+//!
+//! ```
+//! use getoptions_long::*;
+//! let args = ["--foo", "--baz", "--bar", "--baz"];
+//!
+//! let command = std::cell::RefCell::new(String::new());
+//!
+//! let sub: &dyn for<'a> Fn(&'a str) = &|arg| {
+//!     let mut command = command.borrow_mut();
+//!     *command = format!("command-{}", arg);
+//! };
+//!
+//! let result = get_options_str(&mut [
+//!     Opt::SubSwitch("foo", sub),
+//!     Opt::SubSwitch("bar", sub),
+//!     Opt::SubSwitch("baz", sub),
+//! ], &args);
+//!
+//! assert_eq!(result, Ok(()));
+//! assert_eq!(command.into_inner(), "command-baz");
+//! ```
+//!
+//! If you aren't familiar with the Rustonomicon (I definitely am not), you might be wondering why
+//! it is quite unergonomic to need to use RefCell.  It is the only way to pass the same closure to
+//! multiple switches (because we're violating the multiple mutable borrows rule).
+//!
+//! Q&A:
+//!
+//! 1. Is it fast?  Seems fast enough for my needs.
+//! 2. How much does it allocate?  No idea.
+//! 3. no_std?  No STDs, but I don't think compiling with no_std is in scope.
+//! 4. Other Getopt::Long options?  Maybe.  I mostly went with what I go with and seems fairly
+//!    consistent with GNU standards.
+//! 5. Any benchmarks?  Nope.
+//! 6. Dependencies?  std.  That's it.
+//! 7. How long did it take you?  Not long enough that I actually released it.
+//! 8. Rewrite Perl in Rust?  Have you looked at the source code?  My eyes go spirally when I see
+//!    way too many macros and ifdefs.  I ain't doing that.  (unless...?)
+//! 9. Why not clap or gumdrop?  See above.
+
+
+// getoptions-long - library to parse command line inspired by perl's Getopt::Long
+// Copyright (C) 2024  Ira Peach
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::slice::Iter;
 
+/// Define options
 pub enum Opt<'a> {
+    /// Represents an option that is true if given.
     Switch(&'a str, &'a mut bool),
+    /// Represents an option that takes an argument.
     Arg(&'a str, &'a mut String),
-    SubArg(&'a str, &'a mut dyn FnMut(&str,&str)),
-    SubSwitch(&'a str, &'a mut dyn FnMut(&str)),
+    /// Represents an option whose argument may be parsed via a callback.
+    SubSwitch(&'a str, FnSubSwitch<'a>),
+    /// Represents an option whose argument and value may be parsed via a callback.
+    SubArg(&'a str, FnSubArg<'a>),
+    /// Represents a set of arguments not bound to any options.
     Free(&'a mut Vec<String>),
-    //Opt(&'a str, &'a mut str),
 }
+
+pub type FnSubSwitch<'a> = &'a dyn Fn(&str);
+pub type FnSubArg<'a> = &'a dyn Fn(&str,&str);
 
 impl Debug for Opt<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
@@ -125,6 +241,8 @@ fn handle_short_opt(args_iter: &mut Iter<&str>, arg: &str, opts: &mut [Opt]) -> 
                     if chars_iter.peek().is_some() {
                         let a: String = chars_iter.collect();
                         *s = a;
+                        // collect the rest as an argument here; if we don't return, we will
+                        // possibly error when we didn't mean to.
                         return Ok(true);
                     }
                     else if let Some(a) = args_iter.next() {
@@ -279,6 +397,8 @@ pub fn get_options_str(opts: &mut [Opt], args: &[&str]) -> Result<(),Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::cell::RefCell;
 
     #[test]
     fn test_no_input() {
@@ -465,36 +585,34 @@ mod tests {
     fn test_callback() {
         let args = ["-f", "foo", "-f", "bar"];
 
-        let mut opt = String::new();
+        let opt = RefCell::new(String::new());
 
         let result = get_options_str(&mut [
-            Opt::SubArg("flag|f", &mut |_arg, val| { opt = format!("{}{}", opt, val); }),
+            Opt::SubArg("flag|f", &|_arg, val| { opt.replace_with(|opt| format!("{}{}", opt, val)); }),
         ], &args);
 
         assert_eq!(result, Ok(()));
-        assert_eq!(opt, "foobar");
+        assert_eq!(opt.into_inner(), "foobar");
 
         let args = ["--flag", "bar", "--flag", "foo"];
 
-        let mut opt = String::new();
+        let opt = RefCell::new(String::new());
 
         let result = get_options_str(&mut [
-            Opt::SubArg("flag|f", &mut |_arg, val| { opt = format!("{}{}", opt, val); }),
+            Opt::SubArg("flag|f", &|_arg, val| { opt.replace_with(|opt| format!("{}{}", opt, val)); }),
         ], &args);
 
         assert_eq!(result, Ok(()));
-        assert_eq!(opt, "barfoo");
+        assert_eq!(opt.into_inner(), "barfoo");
     }
 
     #[test]
     fn test_callback_switch() {
         let args = ["-v", "-f", "-v", "-e", "-g"];
 
-        use std::cell::RefCell;
-
         let opt: RefCell<i64> = 0.into();
 
-        let sub: &mut dyn for<'a> FnMut(&'a str) = &mut |arg| {
+        let sub: &dyn for<'a> Fn(&'a str) = &|arg| {
             if arg == "f" {
                 *opt.borrow_mut() += 2;
             }
@@ -732,20 +850,94 @@ mod tests {
     fn test_callback_underfloaw() {
         let args = ["--foo", "7", "--bar"];
 
-        let mut flag_a = String::new();
-        let mut flag_b = String::new();
+        let flag_a = RefCell::new(String::new());
+        let flag_b = RefCell::new(String::new());
 
         let result = get_options_str(&mut [
             Opt::SubArg("foo", &mut |_arg, val| {
-                flag_a = val.to_owned();
+                flag_a.replace_with(|_| val.to_owned());
             }),
             Opt::SubArg("bar", &mut |_arg, val| {
-                flag_b = val.to_owned();
+                flag_b.replace_with(|_| val.to_owned());
             }),
         ], &args);
 
         assert_eq!(result, Err(Error::NeedArgument("--bar".to_string())));
-        assert_eq!(flag_b, "");
+        assert_eq!(flag_b.into_inner(), "");
+    }
+
+    #[test]
+    fn test_mutually_exclusive() {
+        let args = ["--foo", "--baz", "--bar", "--baz"];
+
+        let command = RefCell::new(String::new());
+
+        let sub: &dyn for<'a> Fn(&'a str) = &|arg| {
+            let mut command = command.borrow_mut();
+            *command = format!("command-{}", arg);
+        };
+
+        let result = get_options_str(&mut [
+            Opt::SubSwitch("foo", sub),
+            Opt::SubSwitch("bar", sub),
+            Opt::SubSwitch("baz", sub),
+        ], &args);
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(command.into_inner(), "command-baz");
+    }
+
+    #[test]
+    fn test_sledgehammer_example() {
+        // pretend we've already done:
+        // let args: Vec<String> = std::env::args().collect();
+        let args: Vec<String> = vec!["/usr/local/bin/backup-profile", "--list", "-n", "--backup-dir=/mnt/usr1/backups", "--backup-dir", "/mnt/usr1/backups-test", "-v", "--", "-f.txt"].into_iter().map(|x| x.to_string()).collect();
+        let prog = args[0].clone();
+        let args: Vec<String> = args.into_iter().skip(1).collect();
+        let usage =  || {
+            let prog = std::path::Path::new(&prog).file_name().unwrap().to_string_lossy();
+            println!("usage: {prog} [-hlcpnv] [-b BACKUP] [--] [TAR_ARGUMENTS]");
+            println!("  backup firefox profiles on win32 from cygwin");
+            println!("  -h,--help               display this usage");
+            println!("  -b,--backup-dir BACKUP  output backup files to BACKUP (default '.')");
+            println!("  -l,--list               list profiles and their paths");
+            println!("  -n,--dry-run            perform dry run with commands printed");
+            println!("  -p,--print              print Firefox configuration root");
+            println!("  -v,--verbose            be noisier");
+        };
+
+        let mut backup_dir = String::new();
+        let mut dry_run = false;
+        let mut free_args = vec![];
+        let mut list = false;
+        let mut print = false;
+        let mut verbose = false;
+
+        let result = get_options(&mut [
+            Opt::SubSwitch("help|h", &mut |_| { usage(); std::process::exit(0); }),
+            Opt::Switch   ("list|l", &mut list),
+            Opt::Switch   ("p|print", &mut print),
+            Opt::Switch   ("dry-run|n", &mut dry_run),
+            Opt::Arg      ("backup-dir|b", &mut backup_dir),
+            Opt::Switch   ("verbose|v", &mut verbose),
+            Opt::Free     (&mut free_args),
+        ], &args);
+
+        if let Err(ref err) = result {
+            eprintln!("ERROR: parsing command line arguments: {err}");
+            //std::process::exit(1); // don't do this in a test
+        }
+
+        // use the above options in a program...
+
+        assert_eq!(backup_dir, "/mnt/usr1/backups-test");
+        assert!(dry_run);
+        assert_eq!(free_args, vec!["-f.txt"]);
+        assert!(list);
+        assert!(!print);
+        assert!(verbose);
+
+        assert_eq!(result, Ok(()));
     }
 }
 
@@ -756,10 +948,10 @@ mod tests {
 //     sub add_arg {
 //         push @args, @_;
 //     }
-//     
+//
 //     my $options_file = ".optionsrc";
 //     my $verbose;
-//     
+//
 //     GetOptions(
 //         "h|help" => sub { usage; exit 0 },
 //         "f|options-file" => \$options_file,
