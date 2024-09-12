@@ -7,6 +7,8 @@
 //! Quickstart:
 //!
 //! ```
+//! use std::cell::RefCell;
+//!
 //! use getoptions_long::*;
 //! let args: Vec<String> = std::env::args().collect();
 //! // example invocation:
@@ -29,7 +31,7 @@
 //!
 //! let mut backup_dir = String::new();
 //! let mut dry_run = false;
-//! let mut free_args = vec![];
+//! let free_args = RefCell::new(vec![]);
 //! let mut list = false;
 //! let mut print = false;
 //! let mut verbose = false;
@@ -41,7 +43,7 @@
 //!     Opt::Switch   ("dry-run|n", &mut dry_run),
 //!     Opt::Arg      ("backup-dir|b", &mut backup_dir),
 //!     Opt::Switch   ("verbose|v", &mut verbose),
-//!     Opt::Free     (&mut free_args),
+//!     Opt::Free     (&|arg| free_args.borrow_mut().push(arg.to_string())),
 //! ], &args);
 //!
 //! if let Err(ref err) = result {
@@ -138,11 +140,12 @@ pub enum Opt<'a> {
     /// Represents an option whose argument and value may be parsed via a callback.
     SubArg(&'a str, FnSubArg<'a>),
     /// Represents a set of arguments not bound to any options.
-    Free(&'a mut Vec<String>),
+    Free(FnFree<'a>),
 }
 
 pub type FnSubSwitch<'a> = &'a dyn Fn(&str);
 pub type FnSubArg<'a> = &'a dyn Fn(&str,&str);
+pub type FnFree<'a> = &'a dyn Fn(&str);
 
 impl Debug for Opt<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
@@ -151,7 +154,7 @@ impl Debug for Opt<'_> {
             Opt::Arg(x, s) => f.debug_tuple("Opt::Arg").field(x).field(s).finish(),
             Opt::SubArg(x, _) => f.debug_tuple("Opt::SubArg").field(x).field(&"Fn").finish(),
             Opt::SubSwitch(x, _) => f.debug_tuple("Opt::SubSwitch").field(x).field(&"Fn").finish(),
-            Opt::Free(v) => f.debug_tuple("Opt::Free").field(v).finish(),
+            Opt::Free(_) => f.debug_tuple("Opt::Free").field(&"Fn").finish(),
         }
     }
 }
@@ -346,9 +349,10 @@ fn handle_long_opt(args_iter: &mut Iter<&str>, arg: &str, opts: &mut [Opt]) -> R
 }
 
 fn handle_free_arg(arg: &str, opts: &mut [Opt]) -> Result<(),Error> {
-    for opt in &mut *opts {
-        if let Opt::Free(&mut ref mut vec) = opt {
-            vec.push(arg.to_string());
+    for opt in opts.iter_mut() {
+        if let Opt::Free(f) = opt {
+            let f: FnFree = f;
+            f(arg);
             return Ok(());
         }
     }
@@ -653,28 +657,36 @@ mod tests {
     fn test_free_arguments() {
         let args = ["a", "bb", "ccc"];
 
-        let mut free = vec![];
+        let free = RefCell::new(vec![]);
+
+        let sub: FnFree = &|s| {
+            free.borrow_mut().push(s.to_string());
+        };
 
         let result = get_options_str(&mut [
-            Opt::Free(&mut free),
+            Opt::Free(sub),
         ], &args);
 
         assert_eq!(result, Ok(()));
-        assert_eq!(free, vec!["a", "bb", "ccc"]);
+        assert_eq!(free.into_inner(), vec!["a", "bb", "ccc"]);
     }
 
     #[test]
     fn test_double_dash_omit() {
         let args = ["--"];
 
-        let mut free = vec![];
+        let free = RefCell::new(vec![]);
+
+        let sub: FnFree = &|s| {
+            free.borrow_mut().push(s.to_string());
+        };
 
         let result = get_options_str(&mut [
-            Opt::Free(&mut free),
+            Opt::Free(sub),
         ], &args);
 
         assert_eq!(result, Ok(()));
-        assert!(free.len() == 0);
+        assert!(free.into_inner().len() == 0);
     }
 
     #[test]
@@ -682,13 +694,18 @@ mod tests {
         let args = ["--", "-f"];
 
         let mut flag = false;
-        let mut free = vec![];
+        let free = RefCell::new(vec![]);
+
+        let sub: FnFree = &|s| {
+            free.borrow_mut().push(s.to_string());
+        };
 
         let result = get_options_str(&mut [
             Opt::Switch("f|flag", &mut flag),
-            Opt::Free(&mut free),
+            Opt::Free(sub),
         ], &args);
 
+        let free = free.into_inner();
         assert_eq!(result, Ok(()));
         assert!(!flag);
         assert!(free.len() == 1);
@@ -807,16 +824,20 @@ mod tests {
         let args = ["--foo", "7"];
 
         let mut flag_a = false;
-        let mut free = vec![];
+        let free = RefCell::new(vec![]);
+
+        let sub: FnFree = &|s| {
+            free.borrow_mut().push(s.to_string());
+        };
 
         let result = get_options_str(&mut [
             Opt::Switch("a", &mut flag_a),
-            Opt::Free(&mut free),
+            Opt::Free(sub),
         ], &args);
 
         assert_eq!(result, Err(Error::Unexpected("--foo".to_string())));
         assert_eq!(result.unwrap_err().to_string(), "unexpected argument '--foo'");
-        assert_eq!(free.len(), 0);
+        assert_eq!(free.into_inner().len(), 0);
         assert!(!flag_a);
     }
 
@@ -908,10 +929,14 @@ mod tests {
 
         let mut backup_dir = String::new();
         let mut dry_run = false;
-        let mut free_args = vec![];
+        let free_args = RefCell::new(vec![]);
         let mut list = false;
         let mut print = false;
         let mut verbose = false;
+
+        let sub: FnFree = &|s| {
+            free_args.borrow_mut().push(s.to_string());
+        };
 
         let result = get_options(&mut [
             Opt::SubSwitch("help|h", &mut |_| { usage(); std::process::exit(0); }),
@@ -920,7 +945,7 @@ mod tests {
             Opt::Switch   ("dry-run|n", &mut dry_run),
             Opt::Arg      ("backup-dir|b", &mut backup_dir),
             Opt::Switch   ("verbose|v", &mut verbose),
-            Opt::Free     (&mut free_args),
+            Opt::Free     (sub),
         ], &args);
 
         if let Err(ref err) = result {
@@ -932,7 +957,7 @@ mod tests {
 
         assert_eq!(backup_dir, "/mnt/usr1/backups-test");
         assert!(dry_run);
-        assert_eq!(free_args, vec!["-f.txt"]);
+        assert_eq!(free_args.into_inner(), vec!["-f.txt"]);
         assert!(list);
         assert!(!print);
         assert!(verbose);
